@@ -1,0 +1,182 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## Setup & Data preparations
+
+### Setup
+
+```{r setup}
+
+# Packages laden
+library(metafor)
+library(readxl)
+library(summarytools)
+library(psych)
+library(dplyr)
+library(tidyr)
+library(tibble)
+#library(xlsx)
+library(flextable)
+library(officer)
+library(ggplot2)
+library(tidyverse)
+library(magrittr)
+library(zoo) #Rolling means
+library(ggbeeswarm)
+library(moments)
+library(statpsych) #Significance of skewness
+library(writexl)
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+```
+
+### Data preparations
+
+```{r data.preparations}
+
+#### Daten einlesen und fuer Analysen vorbereiten #### 
+
+# Excel-Datei Import
+data <- read_excel("2021-12-15 Coding Sheet no doubles_Analytic.xlsx", col_names = TRUE) # Einlesen der Datei 
+#data <- read_excel("L:/Forschung/aktuell/Alpha/Version3/2021-12-15 Coding Sheet no doubles_Analytic.xlsx", col_names = TRUE)
+#data <- read_excel("K:/Forschung/aktuell/Alpha/Version3/2021-12-15 Coding Sheet no doubles_Analytic.xlsx", col_names = TRUE)
+
+#Recode to indicate missing values (the -1s)
+data[data == '-1'] <- NA
+
+#load("Workspace_AlphaMA.RData")
+fulldata <- data
+data %<>% select(`Reliability of Measurement`, Authors, `Number of Items`, General, `Time between T1 and T2 [days]`, `Independent Sample No`, `Age group`, Age, `N Rel1`, `Tn Rel1`, `Intervention in Study`, `Knowledge Type`, `Broad Content Area`, `Content Area`, `Specific Content`, `Response Format`)
+str(data)
+names(data) <- c("Alpha",
+                 "Study",
+                 "Items",
+                 "Type",
+                 "Delay",
+                 "Sample",
+                 "Level",
+                 "Age",
+                 "N",
+                 "Time",
+                 "Intervention",
+                 "Knowledge",
+                 "Broad",
+                 "Content",
+                 "Specific",
+                 "Format")
+
+data$Items[data$Items == -1] <- NA
+data$N[data$N == "BS"] <- NA
+data$N <- as.numeric(data$N)
+data$Items2 <- data$Items*data$Items
+
+#Indicate each specific sample within each study
+#(in some studies, there were multiple studies, which should be indicated
+#in variable to correct correctly for dependencies of studies and participants)
+#View(data)
+data$StudySample <- interaction(data$Study, data$Sample)
+data$StudySample #There are 156 different samples, from...
+length(unique(data$Study)) #...52 studies; not thaaat many,
+length(unique(data$StudySample))
+#in particular when considering that overall, there are...
+dim(data) #...285 effect sizes.
+
+data %<>%
+  group_by(Study) %>%
+  mutate(Alpha_papermean = mean(Alpha, na.rm = TRUE)) %>%
+  group_by(Study, Sample) %>%
+  mutate(Alpha_samplemean = mean(Alpha, na.rm = TRUE)) %>%
+  ungroup()
+
+data$Items_cent <- data$Items - mean(data$Items, na.rm = TRUE)
+data$Items_cent_quad <- data$Items_cent^2
+data$Items_cent_med <- data$Items - median(data$Items, na.rm = TRUE)
+data$Items_cent_med_quad <- data$Items_cent_med^2
+data$Items_log <- log(data$Items)
+data$Items_log_cent <- data$Items_log - 2.996 #Centered at 20 Items!
+
+data$Age_cent <- data$Age - mean(data$Age, na.rm = TRUE)
+data$Age_cent_med <- data$Age - median(data$Age, na.rm = TRUE)
+data$Age_log <- log(data$Age)
+data$Age_log_cent <- data$Age_log - log(8.64)
+data$Age_log_cent_med <- data$Age_log - log(median(data$Age, na.rm = TRUE))
+
+data %<>% mutate(Format_fac = fct_collapse(Format, other = c("fill-in", "other", "rating", "various"))) %>% mutate(Format_fac = fct_relevel(Format_fac, c("mc", "open", "other", "not specified")))
+
+data %<>% mutate(Broad_fac = fct_collapse(Broad, 'Humanities/SocSci' = c("Humanities", "Social sciences"))) %>% mutate(Broad_fac = fct_relevel(Broad_fac, c("STEM", "Language", "Humanities/SocSci")))
+table(data$Content)
+data %<>% mutate(Content_fac = fct_collapse(Content, Science = c("Biology", "Geosciences", "Medicine/Nursing", "Physics"),
+'SocialSciences/Humanities' = c("History", "Politics", "Psychology"),
+Language = c("L1", "L2"))) %>% mutate(Content_fac = fct_relevel(Content_fac, c("Science", "SocialSciences/Humanities", "Language", "Mathematics")))
+
+data %<>% mutate(Knowledge_fac = fct_relevel(Knowledge, c("conceptual", "facts", "cognitive skill", "mixed")))
+
+data %<>% mutate(Age_log = log(Age)) %>%
+  mutate(Age_log_cent = log(Age) - mean(log(Age)))
+
+data %<>% mutate(Age_fac = case_when((Age <= 10) ~ 1,
+                                     (Age > 10 & Age <= 15) ~ 2,
+                                     (Age > 15) ~ 3))
+
+data %<>% mutate(Items_fac = case_when((Items <= 15) ~ 1,
+                                     (Items > 15 & Items <= 30) ~ 2,
+                                     (Items > 30) ~ 3),
+                 Alpha_transformed = -1*(log(1-Alpha)))
+
+```
+
+# Descriptives
+
+```{r descriptives}
+
+# Sample sizes
+dim(data) # N = 285
+length(unique(data$StudySample)) # 55 samples from...
+length(unique(data$Study)) # ...52 studies
+
+# Age
+describe(data$Age)
+table(data$Format)
+
+# Answer formats
+Formats <- data %>% group_by(Study) %>% count(Format)
+print(Formats, n = Inf)
+
+```
+
+
+# Descriptive figure
+
+```{r figure}
+
+#YES that's the right image regarding catching Alpha-hacking :)
+#Make it even better: Bars just above .70, .80, and .90 in different colors:
+
+data %>% ggplot(aes(x = Alpha)) +
+  geom_histogram(color = "darkblue", fill = "darkgreen", bins = 32) +
+  scale_x_continuous(breaks = seq(0.1, 1, .1), limits = c(0, 1)) +
+  geom_histogram(data = data[!duplicated(data$StudySample),], aes(x = Alpha_papermean), color = "black", fill = "darkred", bins = 30) +
+  theme(panel.background = element_blank(),
+        axis.line = element_line(size = 1, colour = "black", linetype = 1),
+        axis.text = element_text(color="black", face = 1, size = 10),
+        axis.title = element_text(size = 12)) +
+# geom_vline(xintercept = .7, linetype = 2) +
+#  geom_vline(xintercept = .8, linetype = 2) +
+#  geom_vline(xintercept = .9, linetype = 2) +
+  ylab("Number of studies") +
+  xlab("Alpha") #xlab("(Average) alpha per study/individual sample)
+  
+ggsave("Alphas.png", dpi = 600, width = 5.5, height = 3.5)
+
+#Observation: There are clearly many Alphas just above .80, but just above ,70 it's questionable - because there are 7 (!) just at .69 - but if these come mostly from the same study, then the observation that people try to reach .70 or .80 might still hold. let's see: 
+table(data$Alpha)
+describe(data$Alpha)
+#Alphas are skewed/kurtotic;
+#that explains why MA on the non-transformed values yields an estimate
+#of about .78 (about mean), on transformed .83 (about median)
+
+
+```

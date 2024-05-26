@@ -1,0 +1,562 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Meta-Analysis
+
+```{r}
+
+#First, compute transformed alphas, which will be the "yi"-values in the meta-analytic functions
+#and the standard errors, which are the vi-values
+alphas <- escalc(data = data, measure = "ABT", ai = Alpha, mi = Items, ni = N)
+
+#According to the escalc-function, alpha is transformed via L = -ln(1-alpha)
+alphas %<>% mutate(Alpha_transformed = -1*(log(1-Alpha))) %>%
+  mutate(Alpha_backtransformed = -exp(-Alpha_transformed)+1)
+
+#significance-test skewness
+#test.skew(data$Alpha_transformed)
+describe(data$Alpha_transformed)
+hist(data$Alpha_transformed)
+data_sk <- data %>% filter(Alpha_transformed < 4)
+#test.skew(data_sk$Alpha_transformed)
+
+# Metaanalyse fuer alle ES, fuer die eine Moderatorauspraegung kodiert wurde: Transformierte Effektstaerken
+res_tra <- rma(yi = yi, vi = vi, data = alphas, level = 90)
+res_tra <- robust(res_tra, cluster = alphas$StudySample, level = 90)
+res_tra
+res_tra$tau2
+res_tra$QE
+res_tra$QM
+#With study as cluster, 90%SE: 1.87, se = .10, CI = 1.70, 2.05
+-exp(-1.8742)+1
+-exp(-1.6999)+1
+-exp(-2.0484)+1
+
+#Ergebnis mit Transformierten Alphas:
+#.847 CI .817, .871
+#-> ziemlicher Unterschied von .05 (hoeher als mit nicht-ransformierten Alphas); ab jetzt immer transformierte Alphas verwenden
+
+#Expected average item-intercorrelation based on estimated Alpha:
+#Based on median number of items and estimated Alpha, predict Alpha for test with just two items:
+n <- 0.1 #Test length reduced by factor 0.1 - from 20 to 2 items
+a <- -exp(-1.8742)+1
+pred_alpha_n2 <- n*a/(1+(n-1)*a)
+pred_average_r <- -(pred_alpha_n2/(pred_alpha_n2 -2))
+
+a_lower <- -exp(-1.6999)+1
+pred_alpha_n2_lower <- n*a_lower/(1+(n-1)*a_lower)
+pred_average_r_lower <- -(pred_alpha_n2_lower/(pred_alpha_n2_lower -2))
+
+a_upper <- -exp(-2.0484)+1
+pred_alpha_n2_upper <- n*a_upper/(1+(n-1)*a_upper)
+pred_average_r_upper <- -(pred_alpha_n2_upper/(pred_alpha_n2_upper -2))
+
+predict(res_tra)
+
+p_lower <- -exp(-0.4306)+1
+pred_alpha_n2_lower_p <- n*p_lower/(1+(n-1)*p_lower)
+pred_average_r_lower_p <- -(pred_alpha_n2_lower_p/(pred_alpha_n2_lower_p -2))
+
+p_upper <- -exp(-3.3178)+1
+pred_alpha_n2_upper_p <- n*p_upper/(1+(n-1)*p_upper)
+pred_average_r_upper_p <- -(pred_alpha_n2_upper_p/(pred_alpha_n2_upper_p -2))
+
+```
+
+# Itemanzahl (Testlaenge)
+
+```{r}
+
+describe(alphas$Items)
+#Average number of items = 28.81
+#Median number of items = 20
+
+hist(alphas$Items, breaks = 20)
+#There are more than just 1 outliers, so the median is for sure more reasonable for any kind of analysis than the mean
+
+res_items <- rma(yi = yi, vi = vi, data = alphas, mods = ~ Items_log_cent, level = 90)
+res_items <- robust(res_items, cluster = alphas$StudySample)
+res_items$I2
+res_items$tau2.f
+-exp(-1.8526)+1
+str(res_items)
+
+1 - 0.5680/0.7332 #Explained variance: .2253137
+
+#Average Alpha with the average of 29 (median of 20) items: .85
+describe(alphas$Items)
+
+#Predicted Alphas according to Spearman-Brown prophecy formula
+a <- .85
+Alphas_pred <- data.frame(n = numeric(length(seq(0.1, 10, 0.1))),
+                          pred = numeric(length(seq(0.1, 10, 0.1))))
+run <- 1
+for(n in seq(0.1, 10, 0.1)){
+  Alphas_pred[run, 1] <- n
+  Alphas_pred[run, 2] <-  n*a/(1+(n-1)*a) 
+  run <- run + 1
+}
+Alphas_pred %<>% mutate(items = n*20)
+
+alphas %>% ggplot(aes(Items, Alpha)) +
+  geom_point(aes(size = N), position = position_jitter(width = 0.0, height = 0.0),
+             #size = 2,
+             color = "darkblue", shape = 21, fill = "white",
+             stroke = 1.1,
+             alpha = .8) +
+#  geom_smooth(method = "lm", color = "darkblue", size = 1.2, level = .90) +
+  scale_x_continuous(breaks = seq(0, 160, 20), limits = c(0, 160)) +
+  scale_y_continuous(limits = c(0, 1.05), breaks = seq(0, 1, .2)) +
+  xlab("Number of items") +
+  ylab("Alpha") +
+  theme(panel.background = element_blank(),
+        axis.line = element_line(size = 1.2, colour = "black", linetype = 1),
+        axis.text = element_text(color="black", face = 1, size = 10),
+        axis.title = element_text(size = 12)) +
+  scale_size_binned(name="Sample size", breaks = c(30, 50, 100, 300, 500, 1000, 1800)) +
+  geom_line(data = Alphas_pred, aes(x = items, y = pred), size = 1.3, linetype = "longdash") +
+    geom_smooth(se = FALSE, color = "chocolate2", lty="11", linetype = 3, size = 1.5) +
+            theme(legend.key = element_rect(colour = NA, fill = NA),
+    legend.box.background = element_blank())
+#  coord_flip()
+
+ggsave("TestLength_Size_Pred_v3.png", dpi = 600, width = 6.5, height = 3.75)
+
+
+```
+
+## Answer format
+
+```{r}
+
+str(as.factor(alphas$Format))
+levels(as.factor(alphas$Format))
+table(as.factor(alphas$Format))
+
+res_format_items_null <- alphas %>% rma(yi = yi, vi = vi, mods = ~ Items_log_cent, data = ., level = 90)
+
+res_format_items <- alphas %>% rma(yi = yi, vi = vi, mods = ~ Items_log_cent + Format_fac, data = ., level = 90) %>% robust(cluster = alphas$StudySample)
+res_format_items
+
+predict(res_format_items, addx=TRUE)
+pred.format <- predict(res_format_items, newmods= cbind(c(0, 0, 0, 0),
+                                 c(0, 1, 0, 0),
+                                 c(0, 0, 1, 0),
+                                 c(0, 0, 0, 1)), addx=TRUE, transf = transf.iabt)
+
+write_xlsx(pred.format %>% as.data.frame() %>% select(pred:pi.ub)  %>% round(2), "pred_format.xlsx")
+
+res_format_items$R2 - res_format_items_null$R2
+  
+alphas_mc <- alphas %>% filter(Format_fac == "mc")
+res_format_mc <- alphas_mc %>% rma(yi = yi, vi = vi, data = ., level = 90) %>% robust(cluster = alphas_mc$StudySample)
+res_format_mc
+-exp(-res_format_mc$b) + 1
+-exp(-res_format_mc$ci.lb) + 1
+-exp(-res_format_mc$ci.ub) + 1
+res_format_mc$tau2
+res_format_mc$I2
+
+alphas_open <- alphas %>% filter(Format_fac == "open")
+res_format_open <- alphas_open %>% rma(yi = yi, vi = vi, data = ., level = 90) %>% robust(cluster = alphas_open$StudySample)
+res_format_open
+res_format_open$tau2
+res_format_open$I2
+
+alphas_other <- alphas %>% filter(Format_fac == "other")
+res_format_other <- alphas_other %>% rma(yi = yi, vi = vi, data = ., level = 90) %>% robust(cluster = alphas_other$StudySample)
+res_format_other
+res_format_other$tau2
+res_format_other$I2
+
+data %>% filter(Format_fac != "not specified") %>%
+  ggplot(aes(Format_fac, Alpha, fill = Age, size = N)) +
+  geom_violin(width = 1.2, show.legend = F) +
+  scale_x_discrete("",
+                   labels = c("Multiple choice",
+                              "Open answer",
+                              "Other")) +
+  scale_y_continuous("Alpha") +
+  scale_size_binned(name="Sample size", breaks = c(30, 50, 100, 300, 500, 1000, 1800)) +
+  geom_point(aes(size = N), position = position_jitter(width = 0.15, height = 0.05),
+             #size = 2,
+             color = "darkblue", shape = 21, fill = "white",
+             stroke = 1.1,
+             alpha = .8) +
+  geom_boxplot(width = 0.3, lwd = 1.1, alpha = 0.8,
+               outlier.shape = NA, show.legend = F) +
+  theme(panel.background = element_blank(),
+        axis.line = element_line(size = 1.2, colour = "black", linetype = 1),
+        axis.text = element_text(color="black", face = 1, size = 10),
+        axis.title = element_text(size = 12)) +
+  theme(legend.key = element_rect(fill = "white")) +
+            theme(legend.key = element_rect(colour = NA, fill = NA),
+    legend.box.background = element_blank())
+
+ggsave("Format.png", dpi = 600, width = 6, height = 4)
+
+
+```
+
+## Age
+
+```{r age}
+
+describe(alphas$Age)
+
+res_age <- rma(yi = yi, vi = vi, data = alphas, mods = ~ Items_log_cent + Age_cent, level = 90)
+res_age <- robust(res_age, cluster = alphas$StudySample)
+res_age
+res_age$tau2.f
+res_age$I2
+
+27.21 - 22.53137
+
+alphas %>% ggplot(aes(Age, Alpha)) +
+  geom_point(aes(size = N), position = position_jitter(width = 0.0, height = 0.0),
+             color = "darkblue", shape = 21, fill = "white",
+             stroke = 1.1,
+             alpha = .8) +
+  geom_smooth(method = "lm", color = "darkblue", size = 1.2, level = .90) +
+  geom_smooth(se = FALSE, color = "darkblue", linetype = 2, size = 1.2) +
+  scale_x_continuous(breaks = seq(5, 25, 5), limits = c(3, 25)) +
+  scale_y_continuous(limits = c(0, 1.05), breaks = seq(0, 1, .2)) +
+  xlab("Mean age") +
+  ylab("Alpha") +
+  theme(panel.background = element_blank(),
+        axis.line = element_line(size = 1.2, colour = "black", linetype = 1),
+        axis.text = element_text(color="black", face = 1, size = 10),
+        axis.title = element_text(size = 12)) +
+  scale_size_binned(name="Sample size", breaks = c(30, 50, 100, 300, 500, 1000, 1800)) +
+            theme(legend.key = element_rect(colour = NA, fill = NA),
+    legend.box.background = element_blank())
+
+ggsave("Age.png", dpi = 600, width = 6, height = 4)
+
+```
+
+## Intervention: Pre-post
+
+```{r Intervention}
+
+table(alphas$Intervention)
+
+alphas_int <- alphas %>% filter(Intervention == "yes")
+
+res_int_null <- rma(yi = yi, vi = vi, data = alphas_int, mods = ~ Items_log_cent, level = 90)
+res_int <- rma(yi = yi, vi = vi, data = alphas_int, mods = ~ Items_log_cent + Time, level = 90)
+res_int <- robust(res_int, cluster = alphas_int$StudySample)
+res_int
+res_int$tau2.f
+res_int$I2
+
+res_int$R2 - res_int_null$R2
+
+predict(res_int, addx=TRUE)
+pred.int <- predict(res_int, newmods= cbind(c(0, 0, 0, 0),
+                                 c(0, 1, 0, 0),
+                                 c(0, 0, 1, 0),
+                                 c(0, 0, 0, 1)), addx=TRUE, transf = transf.iabt)
+
+write_xlsx(pred.int %>% as.data.frame() %>% select(pred:pi.ub)  %>% round(2), "pred_int.xlsx")
+
+alphas_int_t1 <- alphas_int %>% filter(Time == "t1")  
+res_int_t1 <- rma(yi = yi, vi = vi, data = alphas_int_t1, level = 90)
+res_int_t1 <- robust(res_int_t1, cluster = alphas_int_t1$StudySample)
+res_int_t1
+res_int_t1$tau2
+res_int_t1$I2
+
+alphas_int_t2 <- alphas_int %>% filter(Time == "t2")  
+res_int_t2 <- rma(yi = yi, vi = vi, data = alphas_int_t2, level = 90)
+res_int_t2 <- robust(res_int_t2, cluster = alphas_int_t2$StudySample)
+res_int_t2
+res_int_t2$tau2
+res_int_t2$I2
+
+alphas_int_t3 <- alphas_int %>% filter(Time == "t3")  
+res_int_t3 <- rma(yi = yi, vi = vi, data = alphas_int_t3, level = 90)
+res_int_t3 <- robust(res_int_t3, cluster = alphas_int_t3$StudySample)
+res_int_t3
+res_int_t3$tau2
+res_int_t3$I2
+
+alphas_int_t4 <- alphas_int %>% filter(Time == "t4")  
+res_int_t4 <- rma(yi = yi, vi = vi, data = alphas_int_t4, level = 90)
+res_int_t4 <- robust(res_int_t4, cluster = alphas_int_t4$StudySample)
+res_int_t4
+res_int_t4$tau2
+res_int_t4$I2
+
+
+alphas %>%
+  mutate(Intervention = fct_relevel(Intervention,
+                                    c("yes", "no"))) %>%
+  mutate(Intervention = fct_recode(Intervention,
+                                   "Intervention studies" = "yes",
+                                   "Developmental studies\n(no targeted intervention)" = "no")) %>%
+  ggplot(aes(Time, Alpha, fill = Age, size = N)) +
+  geom_violin(width = 1, show.legend = F) +
+  scale_x_discrete("",
+                   labels = c("T1",
+                              "T2",
+                              "T3",
+                              "T4",
+                              "T5",
+                              "T6")) +
+  scale_y_continuous("Alpha",
+                     limits = c(0, 1.05),
+                     breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+  scale_size_binned(name="Sample size", breaks = c(30, 50, 100, 300, 500, 1000, 1800)) +
+  geom_point(aes(size = N), position = position_jitter(width = 0.15, height = 0.05),
+             #size = 2,
+             color = "darkblue", shape = 21, fill = "white",
+             stroke = 1.1,
+             alpha = .8) +
+  geom_boxplot(width = 0.3, lwd = 1.1, alpha = 0.8,
+               outlier.shape = NA, show.legend = F) +
+  theme(panel.background = element_blank(),
+        axis.line = element_line(size = 1.2, colour = "black", linetype = 1),
+        axis.text = element_text(color="black", face = 1, size = 10),
+        axis.title = element_text(size = 12)) +
+  facet_wrap(~ Intervention, nrow = 2,
+             scales = "free") +
+            theme(legend.key = element_rect(colour = NA, fill = NA),
+    legend.box.background = element_blank())
+
+ggsave("Changes.png", dpi = 600, width = 6, height = 5)
+
+```
+
+## Measurement point (developmental studies)
+
+```{r time}
+
+alphas_noint <- alphas %>% filter(Intervention == "no")
+res_noint_null <- rma(yi = yi, vi = vi, data = alphas_noint, mods = ~ Items_log_cent, level = 90)
+res_noint <- rma(yi = yi, vi = vi, data = alphas_noint, mods = ~ Items_log_cent + Time, level = 90)
+res_noint <- robust(res_noint, cluster = alphas_noint$StudySample)
+res_noint
+res_noint$tau2.f
+res_noint$I2
+res_noint$R2 - res_noint_null$R2
+
+predict(res_noint, addx=TRUE)
+pred.noint <- predict(res_noint, newmods= cbind(c(0, 0, 0, 0, 0, 0),
+                                 c(0, 1, 0, 0, 0, 0),
+                                 c(0, 0, 1, 0, 0, 0),
+                                 c(0, 0, 0, 1, 0, 0),
+                                 c(0, 0, 0, 0, 1, 0),
+                                 c(0, 0, 0, 0, 0, 1)), addx=TRUE, transf = transf.iabt)
+
+write_xlsx(pred.noint %>% as.data.frame() %>% select(pred:pi.ub)  %>% round(2), "pred_noint.xlsx")
+
+
+alphas_noint_t1 <- alphas_noint %>% filter(Time == "t1")  
+res_int_t1 <- rma(yi = yi, vi = vi, data = alphas_noint_t1, level = 90)
+res_int_t1 <- robust(res_int_t1, cluster = alphas_noint_t1$StudySample)
+res_int_t1
+res_int_t1$tau2
+res_int_t1$I2
+
+alphas_noint_t2 <- alphas_noint %>% filter(Time == "t2")  
+res_int_t2 <- rma(yi = yi, vi = vi, data = alphas_noint_t2, level = 90)
+res_int_t2 <- robust(res_int_t2, cluster = alphas_noint_t2$StudySample)
+res_int_t2
+res_int_t2$tau2
+res_int_t2$I2
+
+alphas_noint_t3 <- alphas_noint %>% filter(Time == "t3")  
+res_int_t3 <- rma(yi = yi, vi = vi, data = alphas_noint_t3, level = 90)
+res_int_t3 <- robust(res_int_t3, cluster = alphas_noint_t3$StudySample)
+res_int_t3
+res_int_t3$tau2
+res_int_t3$I2
+
+alphas_noint_t4 <- alphas_noint %>% filter(Time == "t4")  
+res_int_t4 <- rma(yi = yi, vi = vi, data = alphas_noint_t4, level = 90)
+res_int_t4 <- robust(res_int_t4, cluster = alphas_noint_t4$StudySample)
+res_int_t4
+res_int_t4$tau2
+res_int_t4$I2
+
+alphas_noint_t5 <- alphas_noint %>% filter(Time == "t5")  
+res_int_t5 <- rma(yi = yi, vi = vi, data = alphas_noint_t5, level = 90)
+res_int_t5 <- robust(res_int_t5, cluster = alphas_noint_t5$StudySample)
+res_int_t5
+res_int_t5$tau2
+res_int_t5$I2
+
+alphas_noint_t6 <- alphas_noint %>% filter(Time == "t6")  
+res_int_t6 <- rma(yi = yi, vi = vi, data = alphas_noint_t6, level = 90)
+res_int_t6 <- robust(res_int_t6, cluster = alphas_noint_t6$StudySample)
+res_int_t6$tau2
+res_int_t6$I2
+
+```
+
+## Type of knowledge
+
+```{r}
+
+alphas %>%
+  filter(Knowledge_fac == "conceptual") %>%
+  select(Items) %>%
+  describe()
+
+alphas %>%
+  filter(Knowledge_fac == "facts") %>%
+  select(Items) %>%
+  describe()
+
+alphas_kind <- alphas %>% filter(!is.na(Knowledge_fac))
+res_kind_null <- rma(yi = yi, vi = vi, data = alphas_kind, mods = ~ Items_log_cent, level = 90)
+res_kind <- rma(yi = yi, vi = vi, data = alphas_kind, mods = ~ Items_log_cent + Knowledge_fac, level = 90)
+res_kind <- robust(res_kind, cluster = alphas_kind$StudySample)
+res_kind
+
+res_kind$R2 - res_kind_null$R2 #R2
+
+#Compute predicted Alphas for different knowledge kinds incl. confidence and prediction intervals
+
+predict(res_kind, addx=TRUE)
+pred.kind <- predict(res_kind, newmods= cbind(c(0, 0, 0, 0),
+                                 c(0, 1, 0, 0),
+                                 c(0, 0, 1, 0),
+                                 c(0, 0, 0, 1)), addx=TRUE, transf = transf.iabt)
+
+write_xlsx(pred.kind %>% as.data.frame() %>% select(pred:pi.ub)  %>% round(2), "pred_kind.xlsx")
+
+data %>%
+  ggplot(aes(Knowledge_fac, Alpha, fill = Age, size = N)) +
+  geom_violin(width = 1.2, show.legend = F) +
+  scale_x_discrete("",
+                   labels = c("Conceptual",
+                              "Facts",
+                              "Cognitive skill",
+                              "Mixed")) +
+  scale_y_continuous("Alpha") +
+  scale_size_binned(name="Sample size", breaks = c(30, 50, 100, 300, 500, 1000, 1800)) +
+  geom_point(aes(size = N), position = position_jitter(width = 0.15, height = 0.05),
+             #size = 2,
+             color = "darkblue", shape = 21, fill = "white",
+             stroke = 1.1,
+             alpha = .8) +
+  geom_boxplot(width = 0.3, lwd = 1.1, alpha = 0.8,
+               outlier.shape = NA, show.legend = F) +
+  theme(panel.background = element_blank(),
+        axis.line = element_line(size = 1.2, colour = "black", linetype = 1),
+        axis.text = element_text(color="black", face = 1, size = 10),
+        axis.title = element_text(size = 12)) +
+            theme(legend.key = element_rect(colour = NA, fill = NA),
+    legend.box.background = element_blank())
+
+ggsave("Knowledge_type.png", dpi = 600, width = 6, height = 4)
+
+
+```
+
+## Knowledge domain
+
+```{r content.area}
+
+#Let's use the broad content area-variable first, which does not have so many levels and just distinguishes mostly STEM vs. language vs socia lsicenc eor smth like that?
+
+alphas_content <- alphas %>% filter(!is.na(Content_fac))
+res_content_null <- rma(yi = yi, vi = vi, data = alphas_content, mods = ~ Items_log_cent)
+res_content <- rma(yi = yi, vi = vi, data = alphas_content, mods = ~ Items_log_cent + Content_fac)
+res_content <- robust(res_content, cluster = alphas_content$StudySample)
+res_content
+
+res_content$R2 - res_content_null$R2
+
+res_content_socsci <- rma(yi = yi,
+                   vi = vi,
+                   data = alphas_content %>%
+                     mutate(Content_fac = fct_relevel(Content_fac, c("SocialSciences/Humanities"))), mods = ~ Items_log_cent + Content_fac)
+res_content_socsci <- robust(res_content_socsci, cluster = alphas_content$StudySample)
+res_content_socsci
+
+#Compute predicted Alphas for different knowledge domains incl. confidence and prediction intervals
+
+predict(res_content, addx=TRUE)
+pred.content <- predict(res_content, newmods= cbind(c(0, 0, 0, 0),
+                                 c(0, 1, 0, 0),
+                                 c(0, 0, 1, 0),
+                                 c(0, 0, 0, 1)), addx=TRUE, transf = transf.iabt)
+
+write_xlsx(pred.content %>% as.data.frame() %>% select(pred:pi.ub)  %>% round(2), "pred_content.xlsx")
+
+#Language shows the highest alphas! Niiice :) jippie!
+#Then STEM and then Social Sciences
+#Theory behind this: Social sciences are the most "messy"/unsystematic/broad contents, STEM a bit more systematic than language, whereas language is the most "systematic" apart from Math, which is part of STEM
+
+data %>%
+  ggplot(aes(Content_fac, Alpha, fill = Age, size = N)) +
+  geom_violin(width = 1.2, show.legend = F) +
+  scale_x_discrete("",
+                   labels = c("Science",
+                              "Social sciences/\nHumanities",
+                              "Language",
+                              "Mathematics")) +
+  scale_y_continuous("Alpha") +
+  scale_size_binned(name="Sample size", breaks = c(30, 50, 100, 300, 500, 1000, 1800)) +
+  geom_point(aes(size = N), position = position_jitter(width = 0.15, height = 0.05),
+             #size = 2,
+             color = "darkblue", shape = 21, fill = "white",
+             stroke = 1.1,
+             alpha = .8) +
+  geom_boxplot(width = 0.3, lwd = 1.1, alpha = 0.8,
+               outlier.shape = NA, show.legend = F) +
+  theme(panel.background = element_blank(),
+        axis.line = element_line(size = 1.2, colour = "black", linetype = 1),
+        axis.text = element_text(color="black", face = 1, size = 10),
+        axis.title = element_text(size = 12)) +
+            theme(legend.key = element_rect(colour = NA, fill = NA),
+    legend.box.background = element_blank())
+
+ggsave("Knowledge_domain.png", dpi = 600, width = 6, height = 4)
+
+```
+
+## Prediction intervals
+
+```{r prediction.intervals}
+
+pred.alphas <- predict(res_items,
+                       newmods=log(seq(5, 150, 5)) - 2.996,
+                       addx = TRUE,
+                       level = 0.9)
+
+pred.alphas <- predict(res_items,
+                       newmods=log(c(5, seq(10, 150, 10))) - 2.996,
+                       addx = TRUE)
+
+pred.alphas <- data.frame(alpha = -exp(-pred.alphas$pred) + 1,
+                          pi.lb = -exp(-pred.alphas$pi.lb) + 1,
+                          pi.ub = -exp(-pred.alphas$pi.ub) + 1,
+                          items = exp(pred.alphas$X[,"Items_log_cent"] + 2.996))
+
+pred.alphas %>%
+  ggplot(aes(x = items, y = alpha)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin = pi.lb, ymax = pi.ub), width = 1) +
+  theme(panel.background = element_blank(),
+        axis.line = element_line(size = 1, colour = "black", linetype = 1),
+        axis.text = element_text(color="black", face = 1, size = 10),
+        axis.title = element_text(size = 12)) +
+  scale_y_continuous(limits = c(-0.3, 1), breaks = seq(0, 1, 0.1)) +
+  scale_x_continuous(limits = c(0, 150), breaks = c(5, seq(10, 150, 10)))
+
+ggsave("predictionintervals_90.png", width = 8, height = 6, dpi = 450)
+
+library(writexl)
+
+write_xlsx(pred.alphas %>% relocate(items, pi.lb, alpha, pi.ub) %>% round(2), "pred_alphas.xlsx")
+
+```
+
